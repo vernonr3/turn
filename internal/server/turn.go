@@ -10,8 +10,13 @@ import (
 	"github.com/pion/turn/v2/internal/proto"
 )
 
+// we've changed the function signature here to accept a StunMessage interface rather than the struct... and follow through
+// the consequences of this..
+// the consequences at phase 1 have been minimised by invoking m.GetMessage() in numerous cases. This enables the signature of called functions/methods to remain
+// unchanged. In the longer run these would also change to accept an interface, rather than a struct.
 // // https://tools.ietf.org/html/rfc5766#section-6.2
-func handleAllocateRequest(r Request, m *stun.Message) error {
+func handleAllocateRequest(r Request, m stun.StunMessageIF) error {
+	//func handleAllocateRequest(r Request, m *stun.Message) error {
 	r.Log.Debugf("received AllocateRequest from %s", r.SrcAddr.String())
 
 	// 1. The server MUST require that the request be authenticated.  This
@@ -20,6 +25,7 @@ func handleAllocateRequest(r Request, m *stun.Message) error {
 	//    unless the client and server agree to use another mechanism through
 	//    some procedure outside the scope of this document.
 	messageIntegrity, hasAuth, err := authenticateRequest(r, m, stun.MethodAllocate)
+	//messageIntegrity, hasAuth, err := authenticateRequest(r, m.GetMessage(), stun.MethodAllocate)
 	if !hasAuth {
 		return err
 	}
@@ -32,20 +38,20 @@ func handleAllocateRequest(r Request, m *stun.Message) error {
 	requestedPort := 0
 	reservationToken := ""
 
-	badRequestMsg := buildMsg(m.TransactionID, stun.NewType(stun.MethodAllocate, stun.ClassErrorResponse), &stun.ErrorCodeAttribute{Code: stun.CodeBadRequest})
-	insufficientCapacityMsg := buildMsg(m.TransactionID, stun.NewType(stun.MethodAllocate, stun.ClassErrorResponse), &stun.ErrorCodeAttribute{Code: stun.CodeInsufficientCapacity})
+	badRequestMsg := buildMsg(m.GetTransactionID(), stun.NewType(stun.MethodAllocate, stun.ClassErrorResponse), &stun.ErrorCodeAttribute{Code: stun.CodeBadRequest})
+	insufficientCapacityMsg := buildMsg(m.GetTransactionID(), stun.NewType(stun.MethodAllocate, stun.ClassErrorResponse), &stun.ErrorCodeAttribute{Code: stun.CodeInsufficientCapacity})
 
 	// 2. The server checks if the 5-tuple is currently in use by an
 	//    existing allocation.  If yes, the server rejects the request with
 	//    a 437 (Allocation Mismatch) error.
 	if alloc := r.AllocationManager.GetAllocation(fiveTuple); alloc != nil {
 		id, attrs := alloc.GetResponseCache()
-		if id != m.TransactionID {
-			msg := buildMsg(m.TransactionID, stun.NewType(stun.MethodAllocate, stun.ClassErrorResponse), &stun.ErrorCodeAttribute{Code: stun.CodeAllocMismatch})
+		if id != m.GetTransactionID() {
+			msg := buildMsg(m.GetTransactionID(), stun.NewType(stun.MethodAllocate, stun.ClassErrorResponse), &stun.ErrorCodeAttribute{Code: stun.CodeAllocMismatch})
 			return buildAndSendErr(r.Conn, r.SrcAddr, errRelayAlreadyAllocatedForFiveTuple, msg...)
 		}
 		// a retry allocation
-		msg := buildMsg(m.TransactionID, stun.NewType(stun.MethodAllocate, stun.ClassSuccessResponse), append(attrs, messageIntegrity)...)
+		msg := buildMsg(m.GetTransactionID(), stun.NewType(stun.MethodAllocate, stun.ClassSuccessResponse), append(attrs, messageIntegrity)...)
 		return buildAndSend(r.Conn, r.SrcAddr, msg...)
 	}
 
@@ -56,10 +62,10 @@ func handleAllocateRequest(r Request, m *stun.Message) error {
 	//    specifies a protocol other that UDP, the server rejects the
 	//    request with a 442 (Unsupported Transport Protocol) error.
 	var requestedTransport proto.RequestedTransport
-	if err = requestedTransport.GetFrom(m); err != nil {
+	if err = requestedTransport.GetFrom(m.GetMessage()); err != nil {
 		return buildAndSendErr(r.Conn, r.SrcAddr, err, badRequestMsg...)
 	} else if requestedTransport.Protocol != proto.ProtoUDP {
-		msg := buildMsg(m.TransactionID, stun.NewType(stun.MethodAllocate, stun.ClassErrorResponse), &stun.ErrorCodeAttribute{Code: stun.CodeUnsupportedTransProto})
+		msg := buildMsg(m.GetTransactionID(), stun.NewType(stun.MethodAllocate, stun.ClassErrorResponse), &stun.ErrorCodeAttribute{Code: stun.CodeUnsupportedTransProto})
 		return buildAndSendErr(r.Conn, r.SrcAddr, errRequestedTransportMustBeUDP, msg...)
 	}
 
@@ -69,7 +75,7 @@ func handleAllocateRequest(r Request, m *stun.Message) error {
 	//    FRAGMENT attribute in the Allocate request as an unknown
 	//    comprehension-required attribute.
 	if m.Contains(stun.AttrDontFragment) {
-		msg := buildMsg(m.TransactionID, stun.NewType(stun.MethodAllocate, stun.ClassErrorResponse), &stun.ErrorCodeAttribute{Code: stun.CodeUnknownAttribute}, &stun.UnknownAttributes{stun.AttrDontFragment})
+		msg := buildMsg(m.GetTransactionID(), stun.NewType(stun.MethodAllocate, stun.ClassErrorResponse), &stun.ErrorCodeAttribute{Code: stun.CodeUnknownAttribute}, &stun.UnknownAttributes{stun.AttrDontFragment})
 		return buildAndSendErr(r.Conn, r.SrcAddr, errNoDontFragmentSupport, msg...)
 	}
 
@@ -82,9 +88,9 @@ func handleAllocateRequest(r Request, m *stun.Message) error {
 	//     the token is not valid for some reason, the server rejects the
 	//     request with a 508 (Insufficient Capacity) error.
 	var reservationTokenAttr proto.ReservationToken
-	if err = reservationTokenAttr.GetFrom(m); err == nil {
+	if err = reservationTokenAttr.GetFrom(m.GetMessage()); err == nil {
 		var evenPort proto.EvenPort
-		if err = evenPort.GetFrom(m); err == nil {
+		if err = evenPort.GetFrom(m.GetMessage()); err == nil {
 			return buildAndSendErr(r.Conn, r.SrcAddr, errRequestWithReservationTokenAndEvenPort, badRequestMsg...)
 		}
 	}
@@ -96,7 +102,7 @@ func handleAllocateRequest(r Request, m *stun.Message) error {
 	//    server rejects the request with a 508 (Insufficient Capacity)
 	//    error.
 	var evenPort proto.EvenPort
-	if err = evenPort.GetFrom(m); err == nil {
+	if err = evenPort.GetFrom(m.GetMessage()); err == nil {
 		var randomPort int
 		randomPort, err = r.AllocationManager.GetRandomEvenPort()
 		if err != nil {
@@ -117,7 +123,7 @@ func handleAllocateRequest(r Request, m *stun.Message) error {
 	//    with a 300 (Try Alternate) error if it wishes to redirect the
 	//    client to a different server.  The use of this error code and
 	//    attribute follow the specification in [RFC5389].
-	lifetimeDuration := allocationLifeTime(m)
+	lifetimeDuration := allocationLifeTime(m.GetMessage())
 	a, err := r.AllocationManager.CreateAllocation(
 		fiveTuple,
 		r.Conn,
@@ -167,12 +173,13 @@ func handleAllocateRequest(r Request, m *stun.Message) error {
 		responseAttrs = append(responseAttrs, proto.ReservationToken([]byte(reservationToken)))
 	}
 
-	msg := buildMsg(m.TransactionID, stun.NewType(stun.MethodAllocate, stun.ClassSuccessResponse), append(responseAttrs, messageIntegrity)...)
-	a.SetResponseCache(m.TransactionID, responseAttrs)
+	msg := buildMsg(m.GetTransactionID(), stun.NewType(stun.MethodAllocate, stun.ClassSuccessResponse), append(responseAttrs, messageIntegrity)...)
+	a.SetResponseCache(m.GetTransactionID(), responseAttrs)
 	return buildAndSend(r.Conn, r.SrcAddr, msg...)
 }
 
-func handleRefreshRequest(r Request, m *stun.Message) error {
+// func handleRefreshRequest(r Request, m *stun.Message) error {
+func handleRefreshRequest(r Request, m stun.StunMessageIF) error {
 	r.Log.Debugf("received RefreshRequest from %s", r.SrcAddr.String())
 
 	messageIntegrity, hasAuth, err := authenticateRequest(r, m, stun.MethodRefresh)
@@ -180,7 +187,7 @@ func handleRefreshRequest(r Request, m *stun.Message) error {
 		return err
 	}
 
-	lifetimeDuration := allocationLifeTime(m)
+	lifetimeDuration := allocationLifeTime(m.GetMessage())
 	fiveTuple := &allocation.FiveTuple{
 		SrcAddr:  r.SrcAddr,
 		DstAddr:  r.Conn.LocalAddr(),
@@ -198,7 +205,7 @@ func handleRefreshRequest(r Request, m *stun.Message) error {
 		r.AllocationManager.DeleteAllocation(fiveTuple)
 	}
 
-	return buildAndSend(r.Conn, r.SrcAddr, buildMsg(m.TransactionID, stun.NewType(stun.MethodRefresh, stun.ClassSuccessResponse), []stun.Setter{
+	return buildAndSend(r.Conn, r.SrcAddr, buildMsg(m.GetTransactionID(), stun.NewType(stun.MethodRefresh, stun.ClassSuccessResponse), []stun.Setter{
 		&proto.Lifetime{
 			Duration: lifetimeDuration,
 		},
@@ -206,7 +213,8 @@ func handleRefreshRequest(r Request, m *stun.Message) error {
 	}...)...)
 }
 
-func handleCreatePermissionRequest(r Request, m *stun.Message) error {
+// func handleCreatePermissionRequest(r Request, m *stun.Message) error {
+func handleCreatePermissionRequest(r Request, m stun.StunMessageIF) error {
 	r.Log.Debugf("received CreatePermission from %s", r.SrcAddr.String())
 
 	a := r.AllocationManager.GetAllocation(&allocation.FiveTuple{
@@ -258,10 +266,10 @@ func handleCreatePermissionRequest(r Request, m *stun.Message) error {
 		respClass = stun.ClassErrorResponse
 	}
 
-	return buildAndSend(r.Conn, r.SrcAddr, buildMsg(m.TransactionID, stun.NewType(stun.MethodCreatePermission, respClass), []stun.Setter{messageIntegrity}...)...)
+	return buildAndSend(r.Conn, r.SrcAddr, buildMsg(m.GetTransactionID(), stun.NewType(stun.MethodCreatePermission, respClass), []stun.Setter{messageIntegrity}...)...)
 }
 
-func handleSendIndication(r Request, m *stun.Message) error {
+func handleSendIndication(r Request, m stun.StunMessageIF) error {
 	r.Log.Debugf("received SendIndication from %s", r.SrcAddr.String())
 	a := r.AllocationManager.GetAllocation(&allocation.FiveTuple{
 		SrcAddr:  r.SrcAddr,
@@ -273,12 +281,12 @@ func handleSendIndication(r Request, m *stun.Message) error {
 	}
 
 	dataAttr := proto.Data{}
-	if err := dataAttr.GetFrom(m); err != nil {
+	if err := dataAttr.GetFrom(m.GetMessage()); err != nil {
 		return err
 	}
 
 	peerAddress := proto.PeerAddress{}
-	if err := peerAddress.GetFrom(m); err != nil {
+	if err := peerAddress.GetFrom(m.GetMessage()); err != nil {
 		return err
 	}
 
@@ -294,7 +302,7 @@ func handleSendIndication(r Request, m *stun.Message) error {
 	return err
 }
 
-func handleChannelBindRequest(r Request, m *stun.Message) error {
+func handleChannelBindRequest(r Request, m stun.StunMessageIF) error {
 	r.Log.Debugf("received ChannelBindRequest from %s", r.SrcAddr.String())
 
 	a := r.AllocationManager.GetAllocation(&allocation.FiveTuple{
@@ -306,7 +314,7 @@ func handleChannelBindRequest(r Request, m *stun.Message) error {
 		return fmt.Errorf("%w %v:%v", errNoAllocationFound, r.SrcAddr, r.Conn.LocalAddr())
 	}
 
-	badRequestMsg := buildMsg(m.TransactionID, stun.NewType(stun.MethodChannelBind, stun.ClassErrorResponse), &stun.ErrorCodeAttribute{Code: stun.CodeBadRequest})
+	badRequestMsg := buildMsg(m.GetTransactionID(), stun.NewType(stun.MethodChannelBind, stun.ClassErrorResponse), &stun.ErrorCodeAttribute{Code: stun.CodeBadRequest})
 
 	messageIntegrity, hasAuth, err := authenticateRequest(r, m, stun.MethodChannelBind)
 	if !hasAuth {
@@ -314,12 +322,12 @@ func handleChannelBindRequest(r Request, m *stun.Message) error {
 	}
 
 	var channel proto.ChannelNumber
-	if err = channel.GetFrom(m); err != nil {
+	if err = channel.GetFrom(m.GetMessage()); err != nil {
 		return buildAndSendErr(r.Conn, r.SrcAddr, err, badRequestMsg...)
 	}
 
 	peerAddr := proto.PeerAddress{}
-	if err = peerAddr.GetFrom(m); err != nil {
+	if err = peerAddr.GetFrom(m.GetMessage()); err != nil {
 		return buildAndSendErr(r.Conn, r.SrcAddr, err, badRequestMsg...)
 	}
 
@@ -327,7 +335,7 @@ func handleChannelBindRequest(r Request, m *stun.Message) error {
 		r.Log.Infof("permission denied for client %s to peer %s", r.SrcAddr.String(),
 			peerAddr.IP.String())
 
-		unauthorizedRequestMsg := buildMsg(m.TransactionID,
+		unauthorizedRequestMsg := buildMsg(m.GetTransactionID(),
 			stun.NewType(stun.MethodChannelBind, stun.ClassErrorResponse),
 			&stun.ErrorCodeAttribute{Code: stun.CodeUnauthorized})
 		return buildAndSendErr(r.Conn, r.SrcAddr, err, unauthorizedRequestMsg...)
@@ -345,7 +353,7 @@ func handleChannelBindRequest(r Request, m *stun.Message) error {
 		return buildAndSendErr(r.Conn, r.SrcAddr, err, badRequestMsg...)
 	}
 
-	return buildAndSend(r.Conn, r.SrcAddr, buildMsg(m.TransactionID, stun.NewType(stun.MethodChannelBind, stun.ClassSuccessResponse), []stun.Setter{messageIntegrity}...)...)
+	return buildAndSend(r.Conn, r.SrcAddr, buildMsg(m.GetTransactionID(), stun.NewType(stun.MethodChannelBind, stun.ClassSuccessResponse), []stun.Setter{messageIntegrity}...)...)
 }
 
 func handleChannelData(r Request, c *proto.ChannelData) error {

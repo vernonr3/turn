@@ -5,7 +5,8 @@ import (
 	"github.com/pion/turn/v2/internal/ipnet"
 )
 
-func handleBindingRequest(r Request, m *stun.Message) error {
+// func handleBindingRequest(r Request, m *stun.Message) error {
+func handleBindingRequest(r Request, m stun.StunMessageIF) error {
 	r.Log.Debugf("received BindingRequest from %s", r.SrcAddr.String())
 
 	ip, port, err := ipnet.AddrIPPort(r.SrcAddr)
@@ -13,7 +14,7 @@ func handleBindingRequest(r Request, m *stun.Message) error {
 		return err
 	}
 
-	attrs := buildMsg(m.TransactionID, stun.BindingSuccess, &stun.XORMappedAddress{
+	attrs := buildMsg(m.GetTransactionID(), stun.BindingSuccess, &stun.XORMappedAddress{
 		IP:   ip,
 		Port: port,
 	}, stun.Fingerprint)

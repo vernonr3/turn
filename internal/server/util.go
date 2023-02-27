@@ -61,7 +61,12 @@ func buildMsg(transactionID [stun.TransactionIDSize]byte, msgType stun.MessageTy
 	return append([]stun.Setter{&stun.Message{TransactionID: transactionID}, msgType}, additional...)
 }
 
-func authenticateRequest(r Request, m *stun.Message, callingMethod stun.Method) (stun.MessageIntegrity, bool, error) {
+// we're forced to change the method signature here to accept a StunMessage interface rather than the struct... and follow through
+// the consequences of this..
+// the consequences at phase 1 have been minimised by invoking m.GetMessage(). This enables the signature of called functions/methods to remain
+// unchanged. In the longer run these would also change to accept an interface, rather than a struct.
+func authenticateRequest(r Request, m stun.StunMessageIF, callingMethod stun.Method) (stun.MessageIntegrity, bool, error) {
+	//func authenticateRequest(r Request, m *stun.Message, callingMethod stun.Method) (stun.MessageIntegrity, bool, error) {
 	respondWithNonce := func(responseCode stun.ErrorCode) (stun.MessageIntegrity, bool, error) {
 		nonce, err := buildNonce()
 		if err != nil {
@@ -73,7 +78,7 @@ func authenticateRequest(r Request, m *stun.Message, callingMethod stun.Method) 
 			return nil, false, errDuplicatedNonce
 		}
 
-		return nil, false, buildAndSend(r.Conn, r.SrcAddr, buildMsg(m.TransactionID,
+		return nil, false, buildAndSend(r.Conn, r.SrcAddr, buildMsg(m.GetTransactionID(),
 			stun.NewType(callingMethod, stun.ClassErrorResponse),
 			&stun.ErrorCodeAttribute{Code: responseCode},
 			stun.NewNonce(nonce),
@@ -88,9 +93,9 @@ func authenticateRequest(r Request, m *stun.Message, callingMethod stun.Method) 
 	nonceAttr := &stun.Nonce{}
 	usernameAttr := &stun.Username{}
 	realmAttr := &stun.Realm{}
-	badRequestMsg := buildMsg(m.TransactionID, stun.NewType(callingMethod, stun.ClassErrorResponse), &stun.ErrorCodeAttribute{Code: stun.CodeBadRequest})
+	badRequestMsg := buildMsg(m.GetTransactionID(), stun.NewType(callingMethod, stun.ClassErrorResponse), &stun.ErrorCodeAttribute{Code: stun.CodeBadRequest})
 
-	if err := nonceAttr.GetFrom(m); err != nil {
+	if err := nonceAttr.GetFrom(m.GetMessage()); err != nil {
 		return nil, false, buildAndSendErr(r.Conn, r.SrcAddr, err, badRequestMsg...)
 	}
 
@@ -106,9 +111,9 @@ func authenticateRequest(r Request, m *stun.Message, callingMethod stun.Method) 
 		return respondWithNonce(stun.CodeStaleNonce)
 	}
 
-	if err := realmAttr.GetFrom(m); err != nil {
+	if err := realmAttr.GetFrom(m.GetMessage()); err != nil {
 		return nil, false, buildAndSendErr(r.Conn, r.SrcAddr, err, badRequestMsg...)
-	} else if err := usernameAttr.GetFrom(m); err != nil {
+	} else if err := usernameAttr.GetFrom(m.GetMessage()); err != nil {
 		return nil, false, buildAndSendErr(r.Conn, r.SrcAddr, err, badRequestMsg...)
 	}
 
@@ -117,7 +122,7 @@ func authenticateRequest(r Request, m *stun.Message, callingMethod stun.Method) 
 		return nil, false, buildAndSendErr(r.Conn, r.SrcAddr, fmt.Errorf("%w %s", errNoSuchUser, usernameAttr.String()), badRequestMsg...)
 	}
 
-	if err := stun.MessageIntegrity(ourKey).Check(m); err != nil {
+	if err := stun.MessageIntegrity(ourKey).Check(m.GetMessage()); err != nil {
 		return nil, false, buildAndSendErr(r.Conn, r.SrcAddr, err, badRequestMsg...)
 	}
 

@@ -24,12 +24,14 @@ func TestServer(t *testing.T) {
 	defer report()
 
 	loggerFactory := logging.NewDefaultLoggerFactory()
+	loggerFactory.DefaultLogLevel = logging.LogLevelDebug
 
 	credMap := map[string][]byte{
 		"user": GenerateAuthKey("user", "pion.ly", "pass"),
 	}
 
 	t.Run("simple", func(t *testing.T) {
+		mstarttime := time.Now()
 		udpListener, err := net.ListenPacket("udp4", "0.0.0.0:3478")
 		assert.NoError(t, err)
 
@@ -73,9 +75,13 @@ func TestServer(t *testing.T) {
 		assert.NoError(t, conn.Close())
 
 		assert.NoError(t, server.Close())
+		mend := time.Since(mstarttime)
+		mtime := fmt.Sprintf("Duration %d microseconds\n", mend.Microseconds())
+		loggerFactory.Writer.Write([]byte(mtime))
 	})
 
 	t.Run("default inboundMTU", func(t *testing.T) {
+		mstarttime := time.Now()
 		udpListener, err := net.ListenPacket("udp4", "0.0.0.0:3478")
 		assert.NoError(t, err)
 		server, err := NewServer(ServerConfig{
@@ -93,6 +99,9 @@ func TestServer(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, server.inboundMTU, defaultInboundMTU)
 		assert.NoError(t, server.Close())
+		mend := time.Since(mstarttime)
+		mtime := fmt.Sprintf("Duration %d microseconds\n", mend.Microseconds())
+		loggerFactory.Writer.Write([]byte(mtime))
 	})
 
 	t.Run("Set inboundMTU", func(t *testing.T) {
@@ -551,7 +560,10 @@ func TestConsumeSingleTURNFrame(t *testing.T) {
 }
 
 func RunBenchmarkServer(b *testing.B, clientNum int) {
+	var mloops int64
+	fmt.Printf("Entering RunBenchmarkServer\n")
 	loggerFactory := logging.NewDefaultLoggerFactory()
+	loggerFactory.DefaultLogLevel = logging.LogLevelDebug
 	credMap := map[string][]byte{
 		"user": GenerateAuthKey("user", "pion.ly", "pass"),
 	}
@@ -616,14 +628,17 @@ func RunBenchmarkServer(b *testing.B, clientNum int) {
 		}
 	}()
 
+	clientconns := make([]net.PacketConn, clientNum)
+	clients := make([]Client, clientNum)
 	// Setup client(s)
-	clients := make([]net.PacketConn, clientNum)
+	turnclients := make([]net.PacketConn, clientNum)
 	for i := 0; i < clientNum; i++ {
 		clientConn, listenErr := net.ListenPacket("udp4", "0.0.0.0:0")
 		if listenErr != nil {
 			b.Fatalf("Failed to allocate socket for client %d: %s", i+1, err)
 		}
-		defer clientConn.Close() //nolint:errcheck
+		clientconns[i] = clientConn
+		//		defer clientConn.Close() //nolint:errcheck
 
 		client, err := NewClient(&ClientConfig{
 			STUNServerAddr: serverAddr.String(),
@@ -637,7 +652,8 @@ func RunBenchmarkServer(b *testing.B, clientNum int) {
 		if err != nil {
 			b.Fatalf("Failed to start client %d: %s", i+1, err)
 		}
-		defer client.Close()
+		clients[i] = *client
+		//		defer client.Close()
 
 		if listenErr := client.Listen(); listenErr != nil {
 			b.Fatalf("Client %d cannot listen: %s", i+1, listenErr)
@@ -648,18 +664,26 @@ func RunBenchmarkServer(b *testing.B, clientNum int) {
 		if err != nil {
 			b.Fatalf("Client %d cannot create allocation: %s", i+1, err)
 		}
-		defer turnConn.Close() //nolint:errcheck
+		//		defer turnConn.Close() //nolint:errcheck
 
-		clients[i] = turnConn
+		turnclients[i] = turnConn
 	}
 
 	// Run benchmark
-	for i := 0; i < b.N; i++ {
+	for j := 0; j < b.N; j++ {
 		for i := 0; i < clientNum; i++ {
-			if _, err := clients[i].WriteTo(testSeq, sinkAddr); err != nil {
+			if _, err := turnclients[i].WriteTo(testSeq, sinkAddr); err != nil {
 				b.Fatalf("Client %d cannot send to TURN server: %s", i+1, err)
 			}
 		}
+		mloops = int64(j * clientNum)
+	}
+	//time.Sleep(5)
+	fmt.Printf("Closing connections after sending %d packets\n", mloops)
+	for j := 0; j < clientNum; j++ {
+		clientconns[j].Close()
+		clients[j].Close()
+		turnclients[j].Close()
 	}
 }
 

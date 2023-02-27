@@ -2,8 +2,11 @@
 package turn
 
 import (
+	"context"
 	"fmt"
 	"net"
+	"os"
+	"runtime/trace"
 	"sync"
 	"time"
 
@@ -30,6 +33,10 @@ type Server struct {
 	allocationManagers []*allocation.Manager
 	inboundMTU         int
 }
+
+var task *trace.Task
+var basectx context.Context
+var tracefile *os.File
 
 // NewServer creates the Pion TURN server
 //
@@ -63,7 +70,15 @@ func NewServer(config ServerConfig) (*Server, error) {
 	if s.channelBindTimeout == 0 {
 		s.channelBindTimeout = proto.DefaultLifetime
 	}
-
+	tracefile, err := os.Create("trace.out")
+	if err != nil {
+		panic("unable to open trace file")
+	}
+	trace.Start(tracefile)
+	//defer
+	basectx = context.TODO()
+	_, task = trace.NewTask(basectx, "Request")
+	s.log.Debugf("Opened task, with output to file")
 	for _, cfg := range s.packetConnConfigs {
 		am, err := s.createAllocationManager(cfg.RelayAddressGenerator, cfg.PermissionHandler)
 		if err != nil {
@@ -109,6 +124,10 @@ func (s *Server) Close() error {
 			errors = append(errors, err)
 		}
 	}
+	task.End()
+	trace.Stop()
+	tracefile.Close()
+	s.log.Debugf("Closed task, stopped trace and closed file")
 
 	if len(errors) == 0 {
 		return nil
@@ -171,6 +190,7 @@ func (s *Server) createAllocationManager(addrGenerator RelayAddressGenerator, ha
 func (s *Server) readLoop(p net.PacketConn, allocationManager *allocation.Manager) {
 	buf := make([]byte, s.inboundMTU)
 	for {
+
 		n, addr, err := p.ReadFrom(buf)
 		switch {
 		case err != nil:
@@ -193,5 +213,7 @@ func (s *Server) readLoop(p net.PacketConn, allocationManager *allocation.Manage
 		}); err != nil {
 			s.log.Errorf("error when handling datagram: %v", err)
 		}
+
 	}
+
 }
